@@ -1,0 +1,13 @@
+#skAppDialog{position:fixed;inset:0;z-index:2147483647;display:flex;align-items:center;justify-content:center;padding:20px;background:rgba(2,7,15,.78);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);box-sizing:border-box}
+#skAppDialog[hidden]{display:none!important}
+#skAppDialog .sk-dialog-card{width:min(430px,100%);max-height:min(82dvh,680px);overflow:auto;padding:22px;border:1px solid rgba(231,198,111,.48);border-radius:22px;background:linear-gradient(150deg,#142840,#071521);color:#f8fafc;box-shadow:0 28px 90px rgba(0,0,0,.62);box-sizing:border-box}
+#skAppDialog h2{margin:0 0 10px;color:#ffe086;font:800 22px/1.2 Georgia,serif}
+#skAppDialog p{margin:0 0 16px;color:#d7e1ea;font:500 15px/1.55 system-ui,sans-serif;white-space:pre-wrap}
+#skAppDialog label{display:block;margin:12px 0 5px;color:#f4d487;font:700 13px/1.3 system-ui,sans-serif}
+#skAppDialog input,#skAppDialog textarea{display:block;width:100%;box-sizing:border-box;padding:12px 13px;border:1px solid rgba(231,198,111,.35);border-radius:12px;background:#030d17;color:#fff;font:16px/1.4 system-ui,sans-serif;outline:none;user-select:text;-webkit-user-select:text}
+#skAppDialog textarea{min-height:105px;resize:vertical}
+#skAppDialog input:focus,#skAppDialog textarea:focus{border-color:#ffe086;box-shadow:0 0 0 3px rgba(231,198,111,.13)}
+#skAppDialog .sk-dialog-actions{display:flex;justify-content:flex-end;gap:10px;margin-top:19px}
+#skAppDialog button{min-height:44px;padding:10px 16px;border:1px solid rgba(231,198,111,.28);border-radius:12px;background:transparent;color:#dce7ef;font:800 14px/1 system-ui,sans-serif}
+#skAppDialog .sk-dialog-primary{border:0;background:linear-gradient(135deg,#ffe086,#d49f37);color:#211405}
+#skAppDialog .sk-dialog-danger{border:0;background:#b4232f;color:#fff}

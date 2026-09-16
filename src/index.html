@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#030812">
+<meta name="schatzkarte-bootstrap" content="V194-20260916-IOS-UPDATER-R14">
+<title>Abenteuerkarte</title>
+<style>
+html,body{margin:0;width:100%;height:100%;background:#030812;color:#eef6ff;font-family:Arial,sans-serif}
+body{display:grid;place-items:center;overflow:hidden}
+.boot{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:24px}
+.boot img{width:min(68vw,300px);height:auto;filter:drop-shadow(0 18px 42px rgba(0,0,0,.55))}
+.boot h1{margin:0;color:#e7c66f;font-family:Georgia,"Times New Roman",serif;font-size:clamp(16px,4vw,21px);letter-spacing:.12em;text-transform:uppercase}
+.boot p{margin:0;color:#9fb4c7;font-size:13px;min-height:18px}
+.spinner{width:28px;height:28px;border-radius:50%;border:3px solid rgba(255,255,255,.15);border-top-color:#e7c66f;animation:spin .8s linear infinite}
+.retry{display:none;border:0;border-radius:12px;padding:10px 15px;background:#168cff;color:#fff;font-weight:800}
+@keyframes spin{to{transform:rotate(360deg)}}
+</style>
+</head>
+<body>
+<div class="boot">
+  <img src="schatzkarte-logo.png" alt="Abenteuerkarte">
+  <h1>Geschichte ist überall.</h1>
+  <div class="spinner" id="bootSpinner"></div>
+  <p id="bootStatus">Abenteuerkarte wird geladen …</p>
+  <button class="retry" id="bootRetry" type="button">Erneut versuchen</button>
+</div>
+<script>
+(function(){
+'use strict';
+
+const BASE_RELEASE=14;
+/* Production updater: native builds check latest.json before starting the bundled fallback. */
+const TEST_LOCAL_ONLY=false;
+const PROJECT_REF='ycdzzlkzvsmyklmwearl';
+const BUCKET='app-updates';
+const PUBLIC_ROOT='https://'+PROJECT_REF+'.supabase.co/storage/v1/object/public/'+BUCKET+'/';
+const MANIFEST_URL=PUBLIC_ROOT+'latest-ios.json';
+const DB_NAME='abenteuerkarte-ios-updater-v1';
+const STORE='releases';
+const LAST_KEY='abenteuerkarte.iosUpdater.lastRelease';
+const statusEl=document.getElementById('bootStatus');
+const retryEl=document.getElementById('bootRetry');
+const spinner=document.getElementById('bootSpinner');
+
+function setStatus(t){if(statusEl)statusEl.textContent=t||'';}
+function isNative(){
+  try{
+    if(window.Capacitor&&typeof window.Capacitor.isNativePlatform==='function'&&window.Capacitor.isNativePlatform())return true;
+    if(location.protocol==='capacitor:')return true;
+    if(location.hostname==='localhost' && /(Android|iPhone|iPad|iPod)/i.test(navigator.userAgent||''))return true;
+    return false;
+  }catch(_){return false;}
+}
+function safePath(v){
+  const s=String(v||'').trim().replace(/^\/+/,'');
+  if(!s||s.includes('..')||/^[a-z]+:/i.test(s)||s.startsWith('//'))return '';
+  return s;
+}
+function timeoutFetch(url,ms,opts){
+  const c=new AbortController(),t=setTimeout(()=>c.abort(),ms);
+  return fetch(url,Object.assign({cache:'no-store',signal:c.signal},opts||{})).finally(()=>clearTimeout(t));
+}
+function openDb(){
+  return new Promise(resolve=>{
+    if(!window.indexedDB)return resolve(null);
+    let req;try{req=indexedDB.open(DB_NAME,1);}catch(_){return resolve(null);}
+    req.onupgradeneeded=()=>{const db=req.result;if(!db.objectStoreNames.contains(STORE))db.createObjectStore(STORE,{keyPath:'release'});};
+    req.onsuccess=()=>resolve(req.result);req.onerror=()=>resolve(null);
+  });
+}
+async function cacheGet(release){
+  const db=await openDb();if(!db)return null;
+  return new Promise(resolve=>{try{const tx=db.transaction(STORE,'readonly'),r=tx.objectStore(STORE).get(Number(release));r.onsuccess=()=>resolve(r.result||null);r.onerror=()=>resolve(null);}catch(_){resolve(null);}});
+}
+async function cachePut(bundle){
+  const db=await openDb();if(!db)return false;
+  return new Promise(resolve=>{try{const tx=db.transaction(STORE,'readwrite');tx.objectStore(STORE).put(bundle);tx.oncomplete=()=>resolve(true);tx.onerror=()=>resolve(false);}catch(_){resolve(false);}});
+}
+async function sha256(text){
+  if(!window.crypto?.subtle)return '';
+  const buf=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(text));
+  return Array.from(new Uint8Array(buf)).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+function validateHtml(html){
+  const s=String(html||'');
+  return s.length>50000 && /<html[\s>]/i.test(s) && /<body[\s>]/i.test(s);
+}
+function injectBase(html,baseUrl,release){
+  let out=String(html||'').replace(/<base\b[^>]*>/ig,'');
+  const tag='<base href="'+String(baseUrl).replace(/"/g,'&quot;')+'"><meta name="schatzkarte-active-release" content="'+release+'">';
+  if(/<head[\s>]/i.test(out))out=out.replace(/<head([^>]*)>/i,'<head$1>'+tag);
+  else out=tag+out;
+  return out;
+}
+function activate(html,baseUrl,release,source){
+  if(!validateHtml(html))throw new Error('Ungültiges App-Paket');
+  window.__SCHATZKARTE_ACTIVE_RELEASE=Number(release)||BASE_RELEASE;
+  window.__SCHATZKARTE_UPDATE_SOURCE=source||'local';
+  const prepared=injectBase(html,baseUrl,release);
+  document.open();
+  document.write(prepared);
+  document.close();
+}
+async function loadLocal(){
+  setStatus('Lokale App wird gestartet …');
+  const r=await timeoutFetch('app.html?base='+BASE_RELEASE,7000);
+  if(!r.ok)throw new Error('Lokale App-Datei fehlt ('+r.status+')');
+  const html=await r.text();
+  activate(html,new URL('./',location.href).href,BASE_RELEASE,'bundled');
+}
+async function loadCachedFallback(){
+  let last=0;try{last=Number(localStorage.getItem(LAST_KEY)||0)||0;}catch(_){}
+  if(last<=BASE_RELEASE)return false;
+  const cached=await cacheGet(last);
+  if(!cached?.html||!cached?.baseUrl)return false;
+  setStatus('Gespeichertes Update wird gestartet …');
+  activate(cached.html,cached.baseUrl,last,'cached-offline');
+  return true;
+}
+async function fetchManifest(){
+  const r=await timeoutFetch(MANIFEST_URL+'?ts='+Date.now(),2500,{headers:{Accept:'application/json'}});
+  if(r.status===404)return null;
+  if(!r.ok)throw new Error('Manifest '+r.status);
+  const m=await r.json();
+  const release=Number(m?.release)||0;
+  const entry=safePath(m?.entry);
+  const base=safePath(m?.base || (entry.includes('/')?entry.slice(0,entry.lastIndexOf('/')+1):''));
+  if(release<=0||!entry||!base)return null;
+  return {release,entry,base,sha256:String(m?.sha256||'').trim().toLowerCase(),disabled:m?.disabled===true};
+}
+async function loadRemote(m){
+  const cached=await cacheGet(m.release);
+  /* A release number alone is not enough: a previously interrupted upload can
+     leave an older HTML bundle under the same release in IndexedDB. Reuse a
+     cache entry only when it is explicitly tied to the manifest checksum. */
+  if(cached?.html&&cached?.baseUrl&&cached?.sha256&&(!m.sha256||cached.sha256===m.sha256)){
+    setStatus('Aktuelles Update wird gestartet …');
+    try{localStorage.setItem(LAST_KEY,String(m.release));}catch(_){}
+    activate(cached.html,cached.baseUrl,m.release,'cached');
+    return;
+  }
+  setStatus('Update '+m.release+' wird geladen …');
+  const entryUrl=PUBLIC_ROOT+m.entry+'?r='+encodeURIComponent(m.release);
+  const baseUrl=PUBLIC_ROOT+m.base;
+  const r=await timeoutFetch(entryUrl,12000);
+  if(!r.ok)throw new Error('Update-Datei '+r.status);
+  const html=await r.text();
+  if(!validateHtml(html))throw new Error('Update-Datei unvollständig');
+  if(m.sha256){
+    setStatus('Update wird geprüft …');
+    const actual=await sha256(html);
+    if(actual&&actual!==m.sha256)throw new Error('Prüfsumme stimmt nicht');
+  }
+  await cachePut({release:m.release,html,baseUrl,sha256:m.sha256||'',savedAt:Date.now()});
+  try{localStorage.setItem(LAST_KEY,String(m.release));}catch(_){}
+  setStatus('Update wird gestartet …');
+  activate(html,baseUrl,m.release,'download');
+}
+async function boot(){
+  retryEl.style.display='none';spinner.style.display='block';
+  if(TEST_LOCAL_ONLY || !isNative()){
+    await loadLocal();
+    return;
+  }
+  setStatus('Auf Updates prüfen …');
+  try{
+    const manifest=await fetchManifest();
+    if(manifest && !manifest.disabled && manifest.release>BASE_RELEASE){
+      await loadRemote(manifest);
+      return;
+    }
+    if(manifest && manifest.release<=BASE_RELEASE){
+      try{localStorage.removeItem(LAST_KEY);}catch(_){}
+    }
+    await loadLocal();
+  }catch(e){
+    console.warn('[Schatzkarte updater]',e);
+    try{if(await loadCachedFallback())return;}catch(cacheErr){console.warn('[Schatzkarte updater cache]',cacheErr);}
+    try{await loadLocal();return;}catch(localErr){
+      console.error('[Schatzkarte updater local]',localErr);
+      setStatus('App konnte nicht gestartet werden. Bitte Internetverbindung prüfen und erneut versuchen.');
+      spinner.style.display='none';retryEl.style.display='inline-block';
+    }
+  }
+}
+retryEl.addEventListener('click',boot);
+boot();
+})();
+</script>
+</body>
+</html>

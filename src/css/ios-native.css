@@ -1,0 +1,32 @@
+/* iOS-only runtime overrides. This file is NOT used by the Android/Web base. */
+:root{--sk-ios-keyboard-height:0px;--sk-ios-safe-top:env(safe-area-inset-top,0px);--sk-ios-safe-bottom:env(safe-area-inset-bottom,0px)}
+html.sk-ios-native,html.sk-ios-native body{width:100%!important;height:100%!important;max-width:100%!important;overflow:hidden!important;overscroll-behavior:none!important;background:#030812!important}
+html.sk-ios-native body.map-active #mapApplication,
+html.sk-ios-native body.map-active #mapApplication #map,
+html.sk-ios-native body.map-active #skNewUI{height:100dvh!important;min-height:100dvh!important;max-height:100dvh!important;transform:none!important}
+/* Never move the map itself when iOS opens the software keyboard. */
+html.sk-ios-native body.sk-ios-keyboard-open #mapApplication,
+html.sk-ios-native body.sk-ios-keyboard-open #mapApplication #map,
+html.sk-ios-native body.sk-ios-keyboard-open #skNewUI{height:100dvh!important;min-height:100dvh!important;max-height:100dvh!important;top:0!important;transform:none!important}
+@media(max-width:700px){
+  html.sk-ios-native .sk-topbar{top:calc(8px + env(safe-area-inset-top,0px))!important;left:8px!important;right:8px!important}
+  html.sk-ios-native #skMapChatLauncher{top:calc(59px + env(safe-area-inset-top,0px))!important}
+  html.sk-ios-native #skMapChatPanel{
+    top:calc(6px + env(safe-area-inset-top,0px))!important;
+    bottom:calc(6px + env(safe-area-inset-bottom,0px) + var(--sk-ios-keyboard-height,0px))!important;
+    left:6px!important;right:6px!important;width:auto!important;height:auto!important;max-height:none!important;
+    transform:none!important
+  }
+  html.sk-ios-native #haiOverlay.open{
+    height:100dvh!important;max-height:100dvh!important;
+    padding:calc(6px + env(safe-area-inset-top,0px)) 0 calc(6px + env(safe-area-inset-bottom,0px) + var(--sk-ios-keyboard-height,0px))!important;
+    align-items:stretch!important
+  }
+  html.sk-ios-native #haiPanel{width:100vw!important;height:auto!important;max-height:100%!important;border-radius:0!important}
+  html.sk-ios-native #haiTop{padding-top:12px!important}
+  html.sk-ios-native .sk-bottom-nav{bottom:calc(7px + env(safe-area-inset-bottom,0px))!important}
+}
+/* Auth/register stay scrollable with a fixed native WebView. */
+html.sk-ios-native #accessGate,html.sk-ios-native #authRegisterView{-webkit-overflow-scrolling:touch!important}
+html.sk-ios-native body.sk-ios-keyboard-open #accessGate,
+html.sk-ios-native body.sk-ios-keyboard-open #authRegisterView{padding-bottom:calc(18px + var(--sk-ios-keyboard-height,0px))!important}

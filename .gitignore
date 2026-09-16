@@ -1,0 +1,11 @@
+node_modules/
+.DS_Store
+*.log
+ios/App/App/public/
+ios/App/DerivedData/
+ios/App/build/
+DerivedData/
+build/
+*.xcarchive
+*.ipa
+.env

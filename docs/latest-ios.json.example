@@ -1,0 +1,6 @@
+{
+  "release": 15,
+  "entry": "ios-releases/15/app.html",
+  "base": "ios-releases/15/",
+  "sha256": "<sha256-of-ios-app-html>"
+}
