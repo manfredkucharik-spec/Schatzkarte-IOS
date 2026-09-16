@@ -6705,6 +6705,13 @@ updateLegend();
   function client(){return window.mapSupabase&&typeof window.mapSupabase.from==='function'?window.mapSupabase:null;}
   function serialise(row){try{return JSON.stringify(row);}catch(_){return '{}';}}
   function parsePayload(v){try{return JSON.parse(String(v||'{}'));}catch(_){return null;}}
+  // capacitor-community/sqlite on iOS prepends an ios_columns metadata row
+  // to query() results. Normalize it once so all cache reads/counts use real rows.
+  function sqliteRows(result){
+    var a=Array.isArray(result?.values)?result.values:[];
+    if(a.length&&a[0]&&typeof a[0]==='object'&&Object.prototype.hasOwnProperty.call(a[0],'ios_columns'))a=a.slice(1);
+    return a;
+  }
 
   async function ensureSQLite(){
     if(sqliteReadyPromise)return sqliteReadyPromise;
@@ -6768,7 +6775,7 @@ updateLegend();
         // Do not continue to metaGet()/sync until the required tables truly exist.
         var schemaCheck=await p.query({database:DB_NAME,readonly:false,statement:
           "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('map_objects','meta')",values:[]});
-        var schemaNames=new Set((Array.isArray(schemaCheck?.values)?schemaCheck.values:[]).map(function(x){return String(x?.name||'')}));
+        var schemaNames=new Set(sqliteRows(schemaCheck).map(function(x){return String(x?.name||'')}));
         var missing=[];
         if(!schemaNames.has('map_objects'))missing.push('map_objects');
         if(!schemaNames.has('meta'))missing.push('meta');
@@ -6778,7 +6785,7 @@ updateLegend();
         // bridge before downloading 66k rows and only failing at the final count.
         await p.run({database:DB_NAME,readonly:false,transaction:true,statement:'INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)',values:['__ios_write_probe__','1']});
         var probe=await p.query({database:DB_NAME,readonly:false,statement:'SELECT value FROM meta WHERE key=? LIMIT 1',values:['__ios_write_probe__']});
-        if(String(probe?.values?.[0]?.value||'')!=='1')throw new Error('SQLite-Schreibtest fehlgeschlagen.');
+        if(String(sqliteRows(probe)?.[0]?.value||'')!=='1')throw new Error('SQLite-Schreibtest fehlgeschlagen.');
         await p.run({database:DB_NAME,readonly:false,transaction:true,statement:'DELETE FROM meta WHERE key=?',values:['__ios_write_probe__']});
 
         console.info('[V47 cache] native SQLite ready');
@@ -6828,7 +6835,7 @@ updateLegend();
     var p=await ensureSQLite();
     if(p){
       var r=await p.query({database:DB_NAME,readonly:false,statement:'SELECT value FROM meta WHERE key=? LIMIT 1',values:[String(k)]});
-      var a=Array.isArray(r?.values)?r.values:[];return a.length?a[0].value:null;
+      var a=sqliteRows(r);return a.length?a[0].value:null;
     }
     return idbTx(META,'readonly',function(st){return new Promise(function(res){var r=st.get(k);r.onsuccess=function(){res(r.result?r.result.value:null)};r.onerror=function(){res(null)}})});
   }
@@ -6875,7 +6882,7 @@ updateLegend();
     var p=await ensureSQLite();
     if(p){
       var r=await p.query({database:DB_NAME,readonly:false,statement:'SELECT payload FROM map_objects ORDER BY CAST(id AS INTEGER), id',values:[]});
-      return (Array.isArray(r?.values)?r.values:[]).map(function(x){return parsePayload(x.payload)}).filter(Boolean);
+      return sqliteRows(r).map(function(x){return parsePayload(x.payload)}).filter(Boolean);
     }
     return (await idbTx(STORE,'readonly',function(st){return new Promise(function(res){var r=st.getAll();r.onsuccess=function(){res(r.result||[])};r.onerror=function(){res([])}})}))||[];
   }
@@ -6885,7 +6892,7 @@ updateLegend();
     if(p){
       var marks=categories.map(function(){return '?'}).join(',');
       var r=await p.query({database:DB_NAME,readonly:false,statement:'SELECT payload FROM map_objects WHERE category IN ('+marks+')',values:categories});
-      return (Array.isArray(r?.values)?r.values:[]).map(function(x){return parsePayload(x.payload)}).filter(Boolean);
+      return sqliteRows(r).map(function(x){return parsePayload(x.payload)}).filter(Boolean);
     }
     var rows=await all(),set=new Set(categories);return rows.filter(function(x){return set.has(String(x?.category||''))});
   }
@@ -6908,14 +6915,14 @@ updateLegend();
       }
       vals.push(max);
       var r=await p.query({database:DB_NAME,readonly:false,statement:'SELECT payload FROM map_objects WHERE '+where+order+' LIMIT ?',values:vals});
-      return (Array.isArray(r?.values)?r.values:[]).map(function(x){return parsePayload(x.payload)}).filter(Boolean);
+      return sqliteRows(r).map(function(x){return parsePayload(x.payload)}).filter(Boolean);
     }
     var rows=Array.isArray(window.SCHATZKARTE_LOCAL_MAP_CACHE)&&window.SCHATZKARTE_LOCAL_MAP_CACHE.length?window.SCHATZKARTE_LOCAL_MAP_CACHE:await all();
     return rows.filter(function(row){var blob='';try{blob=JSON.stringify(row).toLowerCase()}catch(_){blob=String(row?.name||'').toLowerCase()}return tokens.every(function(t){return blob.includes(t)})}).slice(0,max);
   }
   async function countRows(){
     var p=await ensureSQLite();
-    if(p){var r=await p.query({database:DB_NAME,readonly:false,statement:'SELECT COUNT(*) AS n FROM map_objects',values:[]});var row=r?.values?.[0]||{};return Number(row.n??row['COUNT(*)']??0)||0;}
+    if(p){var r=await p.query({database:DB_NAME,readonly:false,statement:'SELECT COUNT(*) AS n FROM map_objects',values:[]});var row=sqliteRows(r)[0]||{};return Number(row.n??row['COUNT(*)']??0)||0;}
     return Number(await idbTx(STORE,'readonly',function(st){return new Promise(function(res){var r=st.count();r.onsuccess=function(){res(r.result||0)};r.onerror=function(){res(0)}})}))||0;
   }
 
