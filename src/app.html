@@ -6660,7 +6660,7 @@ updateLegend();
   var IDB_VERSION=1,STORE='map_objects',META='meta';
   var CHUNK=1000,SYNC_INTERVAL=5*60*1000;
   var syncing=false,syncPromise=null,lastAutoSync=0,lastError=null;
-  var CACHE_SCHEMA='ios-1.1';
+  var CACHE_SCHEMA='ios-1.2';
   var sqlite=null,sqliteReadyPromise=null,idbPromise=null;
 
   function sleep(ms){return new Promise(function(r){setTimeout(r,ms)});}
@@ -6724,10 +6724,23 @@ updateLegend();
             var connectionState=await p.isConnection({database:DB_NAME,readonly:false});
             hasConnection=connectionState?.result===true;
           }
-        }catch(_){ hasConnection=false; }
-        if(!hasConnection){
-          await p.createConnection({database:DB_NAME,version:1,encrypted:false,mode:'no-encryption',readonly:false});
+        }catch(checkErr){
+          // Some native iOS reload paths can keep the native SQLite connection
+          // alive while the JS bridge loses its local state. In that case the
+          // following createConnection() call is still safe: an 'already exists'
+          // response simply means we can reuse the native connection.
+          console.warn('[V47 cache] isConnection check failed; probing native connection',checkErr);
         }
+        if(!hasConnection){
+          try{
+            await p.createConnection({database:DB_NAME,version:1,encrypted:false,mode:'no-encryption',readonly:false});
+          }catch(createErr){
+            var createMsg=String(createErr?.message||createErr||'');
+            if(!/connection .*already exists/i.test(createMsg)) throw createErr;
+            console.info('[V47 cache] reusing existing native SQLite connection',DB_NAME);
+          }
+        }
+        // Capacitor SQLite explicitly permits open() to re-open an already-open DB.
         await p.open({database:DB_NAME,readonly:false});
 
         // V47: Build the native schema one statement at a time. Some Android
