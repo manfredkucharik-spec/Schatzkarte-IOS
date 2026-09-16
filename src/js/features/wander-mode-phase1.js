@@ -608,25 +608,59 @@ function confirmEnd(){
     {text:ui('Weiter entdecken'),cls:'wm2-dialog-cancel'}
   ]);
 }
+let nativeGeoPermissionPlugin=null,nativeNotificationPermissionPlugin=null;
+function nativePlugin(name){
+  try{
+    const cap=window.Capacitor;if(!cap)return null;
+    if(name==='Geolocation'&&nativeGeoPermissionPlugin)return nativeGeoPermissionPlugin;
+    if(name==='LocalNotifications'&&nativeNotificationPermissionPlugin)return nativeNotificationPermissionPlugin;
+    const p=typeof cap.registerPlugin==='function'?cap.registerPlugin(name):(cap.Plugins?.[name]||null);
+    if(name==='Geolocation')nativeGeoPermissionPlugin=p;
+    if(name==='LocalNotifications')nativeNotificationPermissionPlugin=p;
+    return p;
+  }catch(e){console.warn('[Explorer native plugin]',name,e);return null}
+}
+async function checkNativePermissions(){
+  let gps='prompt',notes='prompt';
+  const g=nativePlugin('Geolocation'),n=nativePlugin('LocalNotifications');
+  try{if(g?.checkPermissions)gps=(await g.checkPermissions())?.location||gps}catch(e){console.warn('[Explorer GPS permission check]',e)}
+  try{if(n?.checkPermissions)notes=(await n.checkPermissions())?.display||notes}catch(e){console.warn('[Explorer notification permission check]',e)}
+  return {gps,notes};
+}
+async function requestNativePermissions(){
+  let gps='prompt',notes='prompt';
+  const g=nativePlugin('Geolocation'),n=nativePlugin('LocalNotifications');
+  // Request both independently. A location error must never suppress the
+  // notification prompt (the previous iOS build did exactly that).
+  try{if(g?.requestPermissions)gps=(await g.requestPermissions())?.location||gps}catch(e){console.warn('[Explorer GPS permission request]',e)}
+  try{if(n?.requestPermissions)notes=(await n.requestPermissions())?.display||notes}catch(e){console.warn('[Explorer notification permission request]',e)}
+  return {gps,notes};
+}
 async function start(){
   if(state.active){confirmEnd();return}
   const native=window.__schatzkarteGeo?.isNative?.();
   if(native){
-    let gps='granted',notes='granted';
-    try{gps=(await window.Capacitor?.Plugins?.Geolocation?.checkPermissions?.())?.location||gps;notes=(await window.Capacitor?.Plugins?.LocalNotifications?.checkPermissions?.())?.display||notes}catch(_){ }
-    if(gps!=='granted'||notes!=='granted'){
-      dialog('Berechtigungen für Entdecker-Modus','Damit der Entdecker-Modus dich zuverlässig auf historische Orte hinweisen kann, benötigt er Standortzugriff und Benachrichtigungen.',[
-        {text:'Berechtigungen erlauben',cls:'wm2-dialog-primary',go:activate},{text:'Jetzt nicht',cls:'wm2-dialog-cancel'}
+    const perms=await checkNativePermissions();
+    if(perms.gps!=='granted'||perms.notes!=='granted'){
+      dialog('Berechtigungen für Entdecker-Modus','Damit der Entdecker-Modus dich zuverlässig auf historische Orte hinweisen kann, benötigt er Standortzugriff. Benachrichtigungen sind für Hinweise empfohlen.',[
+        {text:'Berechtigungen erlauben',cls:'wm2-dialog-primary',go:async()=>{
+          const granted=await requestNativePermissions();
+          if(granted.gps!=='granted'){
+            live('Standortzugriff fehlt','Bitte erlaube der Schatz-Karte den Standort in den iPhone-Einstellungen.',true);
+            return;
+          }
+          await activate(true);
+        }},{text:'Jetzt nicht',cls:'wm2-dialog-cancel'}
       ]);return;
     }
   }
-  activate();
+  activate(true);
 }
-async function requestNativePermissions(){
-  try{await window.Capacitor?.Plugins?.Geolocation?.requestPermissions?.();await window.Capacitor?.Plugins?.LocalNotifications?.requestPermissions?.()}catch(e){console.warn('[Explorer permissions]',e)}
-}
-async function activate(){
-  if(window.__schatzkarteGeo?.isNative?.())await requestNativePermissions();
+async function activate(permissionsReady=false){
+  if(window.__schatzkarteGeo?.isNative?.()&&!permissionsReady){
+    const granted=await requestNativePermissions();
+    if(granted.gps!=='granted'){live('Standortzugriff fehlt','Bitte erlaube der Schatz-Karte den Standort in den iPhone-Einstellungen.',true);return}
+  }
   await loadPersistentDiscoveries();
   state.active=true;state.paused=false;state.follow=true;window.__wanderModeActiveForUi=true;session=newSession();
   await startServerTour();
@@ -645,10 +679,8 @@ async function showPermissionIntro(){
   const key='schatzkarte_explorer_permission_intro_seen';
   try{
     if(localStorage.getItem(key))return;
-    let gps='granted',notes='granted';
-    gps=(await window.Capacitor?.Plugins?.Geolocation?.checkPermissions?.())?.location||gps;
-    notes=(await window.Capacitor?.Plugins?.LocalNotifications?.checkPermissions?.())?.display||notes;
-    if(gps==='granted'&&notes==='granted'){localStorage.setItem(key,'1');return}
+    const perms=await checkNativePermissions();
+    if(perms.gps==='granted'&&perms.notes==='granted'){localStorage.setItem(key,'1');return}
     localStorage.setItem(key,'1');
     dialog('Damit alles funktioniert','Erlaube kurz Standort für deine Position und Benachrichtigungen für Entdeckungen im Entdecker-Modus.',[
       {text:'Berechtigungen erlauben',cls:'wm2-dialog-primary',go:requestNativePermissions},{text:'Später',cls:'wm2-dialog-cancel'}

@@ -5730,7 +5730,10 @@ map.on("click",function(){ if(selectedMapFeature) clearMapSelection(); });
                 }
                 const next = !!on;
                 if(layerEnabled[name] === next) return;
-                if(!next) clearActiveSelectionVisualsForGroup(name);
+                if(!next){
+                    clearActiveSelectionVisualsForGroup(name);
+                    try{window.releaseDeferredMapGroup?.(name);}catch(_){}
+                }
                 layerEnabled[name] = next;
                 // Roman road geometry is loaded lazily per subcategory.
                 if(next && String(name).indexOf('roman_roads_')===0 && typeof window.loadRomanRoadLayer==='function'){
@@ -5762,7 +5765,10 @@ map.on("click",function(){ if(selectedMapFeature) clearMapSelection(); });
                         if(el) el.checked = true;
                         return;
                     }
-                    if(!next) clearActiveSelectionVisualsForGroup(name);
+                    if(!next){
+                        clearActiveSelectionVisualsForGroup(name);
+                        try{window.releaseDeferredMapGroup?.(name);}catch(_){}
+                    }
                     layerEnabled[name] = next;
                     const el = document.getElementById("chk_" + name);
                     if(el) el.checked = next;
@@ -6649,12 +6655,12 @@ updateLegend();
    * Browser/PWA builds keep the existing IndexedDB behaviour as a fallback.
    * The public SCHATZKARTE_CACHE API stays compatible with the rest of the app.
    */
-  var DB_NAME='schatzkarte_map_cache_ios_v1';
-  var IDB_NAME='schatzkarte_app_cache_ios_v1';
+  var DB_NAME='schatzkarte_map_cache_ios_v2';
+  var IDB_NAME='schatzkarte_app_cache_ios_v2';
   var IDB_VERSION=1,STORE='map_objects',META='meta';
   var CHUNK=1000,SYNC_INTERVAL=5*60*1000;
   var syncing=false,syncPromise=null,lastAutoSync=0,lastError=null;
-  var CACHE_SCHEMA='ios-1.0';
+  var CACHE_SCHEMA='ios-1.1';
   var sqlite=null,sqliteReadyPromise=null,idbPromise=null;
 
   function sleep(ms){return new Promise(function(r){setTimeout(r,ms)});}
@@ -6755,6 +6761,13 @@ updateLegend();
         if(!schemaNames.has('meta'))missing.push('meta');
         if(missing.length)throw new Error('SQLite-Schema unvollständig: '+missing.join(', ')+' fehlt.');
 
+        // Native write smoke-test. This catches a linked-but-nonwritable SQLite
+        // bridge before downloading 66k rows and only failing at the final count.
+        await p.run({database:DB_NAME,readonly:false,transaction:true,statement:'INSERT OR REPLACE INTO meta(key,value) VALUES(?,?)',values:['__ios_write_probe__','1']});
+        var probe=await p.query({database:DB_NAME,readonly:false,statement:'SELECT value FROM meta WHERE key=? LIMIT 1',values:['__ios_write_probe__']});
+        if(String(probe?.values?.[0]?.value||'')!=='1')throw new Error('SQLite-Schreibtest fehlgeschlagen.');
+        await p.run({database:DB_NAME,readonly:false,transaction:true,statement:'DELETE FROM meta WHERE key=?',values:['__ios_write_probe__']});
+
         console.info('[V47 cache] native SQLite ready');
         return p;
       }catch(e){
@@ -6815,10 +6828,18 @@ updateLegend();
     rows=(rows||[]).filter(function(x){return x&&x.id!=null;});if(!rows.length)return;
     var p=await ensureSQLite();
     if(p){
-      var set=rows.map(function(x){return {statement:'INSERT OR REPLACE INTO map_objects(id,category,updated_at,lat,lon,payload) VALUES(?,?,?,?,?,?)',values:[String(x.id),String(x.category||''),String(x.updated_at||''),Number.isFinite(Number(x.lat))?Number(x.lat):null,Number.isFinite(Number(x.lon))?Number(x.lon):null,serialise(x)]};});
-      var nativeBatch=200;
-      for(var bi=0;bi<set.length;bi+=nativeBatch){
-        await p.executeSet({database:DB_NAME,readonly:false,transaction:true,set:set.slice(bi,bi+nativeBatch)});
+      /* iOS reliability fix: use run() for DML with bind values, as recommended
+         by the plugin API. Multi-row statements keep bridge traffic low while
+         avoiding the executeSet path that produced a 66,270-download / 0-row DB. */
+      var nativeBatch=80;
+      for(var bi=0;bi<rows.length;bi+=nativeBatch){
+        var batch=rows.slice(bi,bi+nativeBatch),values=[];
+        var marks=batch.map(function(x){
+          values.push(String(x.id),String(x.category||''),String(x.updated_at||''),Number.isFinite(Number(x.lat))?Number(x.lat):null,Number.isFinite(Number(x.lon))?Number(x.lon):null,serialise(x));
+          return '(?,?,?,?,?,?)';
+        }).join(',');
+        var wr=await p.run({database:DB_NAME,readonly:false,transaction:true,statement:'INSERT OR REPLACE INTO map_objects(id,category,updated_at,lat,lon,payload) VALUES '+marks,values:values});
+        if(Number(wr?.changes?.changes)<0)throw new Error('SQLite-Schreibvorgang fehlgeschlagen.');
       }
       return;
     }
@@ -6828,8 +6849,12 @@ updateLegend();
     ids=(ids||[]).filter(function(x){return x!=null;});if(!ids.length)return;
     var p=await ensureSQLite();
     if(p){
-      var set=ids.map(function(id){return {statement:'DELETE FROM map_objects WHERE id=?',values:[String(id)]};});
-      await p.executeSet({database:DB_NAME,readonly:false,transaction:true,set:set});return;
+      for(var di=0;di<ids.length;di+=400){
+        var batch=ids.slice(di,di+400).map(String);
+        var marks=batch.map(function(){return '?'}).join(',');
+        await p.run({database:DB_NAME,readonly:false,transaction:true,statement:'DELETE FROM map_objects WHERE id IN ('+marks+')',values:batch});
+      }
+      return;
     }
     return idbTx(STORE,'readwrite',function(st){ids.forEach(function(id){st.delete(id)})});
   }
@@ -6877,7 +6902,7 @@ updateLegend();
   }
   async function countRows(){
     var p=await ensureSQLite();
-    if(p){var r=await p.query({database:DB_NAME,readonly:false,statement:'SELECT COUNT(*) AS n FROM map_objects',values:[]});return Number(r?.values?.[0]?.n)||0;}
+    if(p){var r=await p.query({database:DB_NAME,readonly:false,statement:'SELECT COUNT(*) AS n FROM map_objects',values:[]});var row=r?.values?.[0]||{};return Number(row.n??row['COUNT(*)']??0)||0;}
     return Number(await idbTx(STORE,'readonly',function(st){return new Promise(function(res){var r=st.count();r.onsuccess=function(){res(r.result||0)};r.onerror=function(){res(0)}})}))||0;
   }
 
@@ -6898,7 +6923,7 @@ updateLegend();
   async function initial(c){
     status(cacheUi('Kartendaten werden einmalig gespeichert …'),true);
     lastError=null;
-    var total=await getActiveCount(c),from=0,count=0,maxUpdated='';
+    var total=await getActiveCount(c),from=0,downloaded=0,stored=0,maxUpdated='';
     if(!Number.isFinite(total) || total<=0){
       throw new Error('Supabase-Gesamtzahl der Kartendaten konnte nicht ermittelt werden.');
     }
@@ -6920,13 +6945,13 @@ updateLegend();
       var r=await fetchWithRetry(function(){return c.from('map_objects').select(COLS).eq('is_deleted',false).order('id',{ascending:true}).range(start,end)},4);
       var rows=Array.isArray(r.data)?r.data:[];
       if(!rows.length)break;
-      await put(rows);count+=rows.length;from+=rows.length;
+      await put(rows);downloaded+=rows.length;from+=rows.length;stored=await countRows();
       rows.forEach(function(x){if(x?.updated_at && String(x.updated_at)>maxUpdated)maxUpdated=String(x.updated_at)});
-      progress(count,Number.isFinite(total)?total:Math.max(count,1),cacheUi('Erster Start:')+' '+count.toLocaleString(cacheLocale())+(Number.isFinite(total)?' / '+total.toLocaleString(cacheLocale()):'')+' '+cacheUi('Kartendaten gespeichert …'));
+      progress(stored,Number.isFinite(total)?total:Math.max(stored,1),cacheUi('Erster Start:')+' '+stored.toLocaleString(cacheLocale())+(Number.isFinite(total)?' / '+total.toLocaleString(cacheLocale()):'')+' '+cacheUi('Kartendaten wirklich lokal gespeichert …'));
       if(rows.length<CHUNK)break;await sleep(0);
     }
-    if(count!==total)throw new Error('Lokaler Erstabgleich unvollständig: '+count+' von '+total+' Datensätzen.');
-    var stored=await countRows();
+    if(downloaded!==total)throw new Error('Lokaler Erstabgleich unvollständig: '+downloaded+' von '+total+' Datensätzen heruntergeladen.');
+    stored=await countRows();
     if(stored!==total)throw new Error('Lokale Datenbankprüfung fehlgeschlagen: '+stored+' von '+total+' Datensätzen gespeichert.');
     /* Completion markers are written LAST. A crash before here can never look complete. */
     await metaSet('row_count',String(stored));
@@ -9292,9 +9317,35 @@ async function register(){
   /* V45: old full Supabase startup preload removed. SQLite/IndexedDB owns first sync. */
 
 
+  /* iOS memory guard: categories are persisted in SQLite, so their heavy
+     MapLibre/JS representation can be released when switched off and rebuilt
+     on demand. This prevents progressive WKWebView/WebGL exhaustion after many
+     category on/off cycles. */
+  window.__deferredMapGroupGeneration=window.__deferredMapGroupGeneration||Object.create(null);
+  function releaseDeferredMapGroup(groupName){
+    if(!document.documentElement.classList.contains('sk-ios-native'))return false;
+    groupName=String(groupName||'');
+    if(!groupName||groupName==='protected'||groupName.startsWith('roman_roads_'))return false;
+    window.__deferredMapGroupGeneration[groupName]=Number(window.__deferredMapGroupGeneration[groupName]||0)+1;
+    try{window.LAYER?.[groupName]?.clearLayers?.()}catch(_){}
+    try{
+      if(Array.isArray(window.allCreatedItems)){
+        const kept=window.allCreatedItems.filter(item=>item?.group!==groupName);
+        window.allCreatedItems.length=0;window.allCreatedItems.push(...kept);
+      }
+    }catch(_){}
+    try{delete window.__deferredMapRowsByGroup?.[groupName]}catch(_){}
+    try{delete window.__deferredMapViewportKeyByGroup?.[groupName]}catch(_){}
+    try{window.__deferredMapGroupsLoaded?.delete?.(groupName)}catch(_){}
+    return true;
+  }
+  window.releaseDeferredMapGroup=releaseDeferredMapGroup;
+
   async function ensureDeferredMapGroup(groupName, force=false){
     if(!groupName || !window.LAYER?.[groupName]) return false;
     if(window.__deferredMapGroupsLoading?.[groupName]) return window.__deferredMapGroupsLoading[groupName];
+    const loadGeneration=Number(window.__deferredMapGroupGeneration?.[groupName]||0);
+    const loadCancelled=()=>Number(window.__deferredMapGroupGeneration?.[groupName]||0)!==loadGeneration;
 
     /* V48 LOCAL CATEGORY CACHE
        All 65k+ objects remain persisted in SQLite. Only a category that the user
@@ -9364,6 +9415,7 @@ async function register(){
               const resolved=typeof groupFor==='function'?groupFor(row):groupName;
               return resolved===groupName;
             });
+            if(loadCancelled())return false;
             window.__deferredMapRowsByGroup ||= Object.create(null);
             window.__deferredMapRowsByGroup[groupName]=cachedRows;
             localLookupDone=true;
@@ -9386,6 +9438,7 @@ async function register(){
         }
 
         if((cachedRows && cachedRows.length) || localLookupDone){
+          if(loadCancelled())return false;
           const rows=(cachedRows||[]).filter(r=>{
             if(String(r?.object_type||'').toLowerCase()==='line') return true;
             const lat=Number(r?.lat),lon=Number(r?.lon);
@@ -9403,6 +9456,7 @@ async function register(){
           let accepted=0;
           try{
             for(let i=0;i<rows.length;i++){
+              if(i%500===0 && loadCancelled())return false;
               const row=rows[i];
               if(addHistoricalRow(row,groupName))accepted++;
               if(i>0 && i%1000===0) await new Promise(resolve=>setTimeout(resolve,0));
@@ -9427,6 +9481,7 @@ async function register(){
         window.__bulkMapHydrating=true;
         try{
           for(;;){
+            if(loadCancelled())return false;
             let q=window.mapSupabase.from('map_objects').select(selectCols)
               .eq('is_deleted',false)
               .order('dedupe_key',{ascending:true})
